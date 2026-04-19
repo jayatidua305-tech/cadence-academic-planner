@@ -1,0 +1,45 @@
+# Dependencies
+node_modules/
+.pnp/
+.pnp.js
+.npm-cache/
+
+# Env files — NEVER COMMIT. The .env.local.example shows expected shape.
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+*.env
+!*.env.example
+
+# Build output
+build/
+dist/
+coverage/
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.log
+compilation_output.txt
+dev_server_compilation.txt
+npm_start_log.txt
+full_startup_log.txt
+*_log.txt
+
+# OS / editor noise
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+Thumbs.db
+
+# Claude harness session data — local-only, not for the public repo
+.claude/
+
+# Runtime caches
+.cache/
+.next/
