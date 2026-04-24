@@ -381,9 +381,9 @@ export default function TodayView({ schedule, events, energyPattern, learnedPatt
         <div style={{fontSize:"1.6rem",fontWeight:700,color:"var(--text)",marginBottom:2,letterSpacing:"-0.015em"}}>
           {getGreeting()}, {userDisplayName() || "Ram"}.
         </div>
-        <div style={{fontSize:"0.85rem",color:"var(--muted)"}}>
+        <div style={{fontSize:"0.85rem",color:"var(--fordham-gold-d, #b8860b)",fontWeight:600}}>
           {now.toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"})}
-          {energyPattern && <span style={{marginLeft:8,color:"var(--muted)"}}>· {energyPattern.archetype}</span>}
+          {energyPattern && <span style={{marginLeft:8,color:"var(--fordham-gold-d, #b8860b)"}}>· {energyPattern.archetype}</span>}
         </div>
       </div>
 
@@ -572,7 +572,7 @@ export default function TodayView({ schedule, events, energyPattern, learnedPatt
 
           {/* ── Risk board ── */}
           {riskyEvents.length > 0 && (
-            <div className="card">
+            <div className="card" style={{ marginTop: 20 }}>
               <div className="card-title">Deadline risk board</div>
               <div className="card-sub">Based on time left, estimated effort, and your history</div>
               {riskyEvents.map((ev,i) => {

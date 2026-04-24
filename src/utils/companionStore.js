@@ -363,6 +363,28 @@ export function rejectGroupBlocker(blockerId) {
   return state;
 }
 
+export function renameGroupBlocker(blockerId, newTitle) {
+  const state = loadCompanionState();
+  const blocker = state.groupBlockers.find(b => b.id === blockerId);
+  if (!blocker) throw new Error("Blocker not found");
+  blocker.title = newTitle.trim() || blocker.title;
+  save(state);
+  return state;
+}
+
+export function reorderCircle(circleId, direction) {
+  const state = loadCompanionState();
+  const idx = state.circles.findIndex(c => c.id === circleId);
+  if (idx === -1) return state;
+  const newIdx = direction === "up" ? idx - 1 : idx + 1;
+  if (newIdx < 0 || newIdx >= state.circles.length) return state;
+  const circles = [...state.circles];
+  [circles[idx], circles[newIdx]] = [circles[newIdx], circles[idx]];
+  state.circles = circles;
+  save(state);
+  return state;
+}
+
 export function getCommonAvailabilityBlocks(circleId = null) {
   const state = loadCompanionState();
   const cid = circleId || state.currentCircleId;
@@ -699,6 +721,39 @@ export function leaveCircle(circleId) {
     }
   }
   
+  save(state);
+  return state;
+}
+
+export function deleteCircle(circleId) {
+  const state = loadCompanionState();
+  const circle = state.circles.find(c => c.id === circleId);
+  if (!circle) throw new Error("Circle not found");
+
+  const userMember = circle.members.find(m => m.id === state.profile.id);
+  if (!userMember || userMember.role !== "owner") {
+    throw new Error("Only the circle owner can delete it");
+  }
+
+  state.circles = state.circles.filter(c => c.id !== circleId);
+  state.sessions = state.sessions.filter(s => s.circleId !== circleId);
+
+  if (state.currentCircleId === circleId) {
+    if (state.circles.length > 0) {
+      state.currentCircleId = state.circles[0].id;
+    } else {
+      const newCircle = {
+        id: uid("circle"),
+        name: "Focus Circle",
+        code: makeInviteCode(),
+        members: [{ id: state.profile.id, name: state.profile.name, role: "owner", joinedAt: new Date().toISOString() }],
+        createdAt: new Date().toISOString(),
+      };
+      state.circles.push(newCircle);
+      state.currentCircleId = newCircle.id;
+    }
+  }
+
   save(state);
   return state;
 }

@@ -9,6 +9,7 @@ import BlackboardImport from "./components/BlackboardImport";
 import ActivityLogger from "./components/ActivityLogger";
 import TodayView from "./components/TodayView";
 import CompanionMode from "./components/CompanionMode";
+import CompanionInsights from "./components/CompanionInsights";
 import { useGoogleCalendar } from "./hooks/useGoogleCalendar";
 import { useBlackboard } from "./hooks/useBlackboard";
 import { loadSessions } from "./utils/patternLearner";
@@ -33,8 +34,8 @@ const STUDENT_NAV = [
 
 const COMPANION_NAV = [
   { section: "Workspace" },
-  { id:"companion",  icon:"◈", label:"Focus Circle",  badge: null },
-  { id:"dashboard",  icon:"▲", label:"Insights",      badge: null },
+  { id:"companion",          icon:"◈", label:"Focus Circle",  badge: null },
+  { id:"companion-insights", icon:"🏆", label:"Leaderboard",   badge: null },
 ];
 
 export default function App() {
@@ -377,30 +378,13 @@ export default function App() {
           })}
         </nav>
 
-        {/* Stats */}
-        <div className="sidebar-stats">
-          <div className="stat-mini">
-            <div className="stat-mini-val">{extractedEvents.length}</div>
-            <div className="stat-mini-lbl">Events</div>
-          </div>
-          <div className="stat-mini">
-            <div className="stat-mini-val">{scheduledEvents.length}</div>
-            <div className="stat-mini-lbl">Scheduled</div>
-          </div>
-          <div className="stat-mini">
-            <div className="stat-mini-val">{loadSessions().length}</div>
-            <div className="stat-mini-lbl">Sessions</div>
-          </div>
-          <div className="stat-mini">
-            <div className="stat-mini-val">{energyPattern?.archetype?.[0]||"—"}</div>
-            <div className="stat-mini-lbl">Type</div>
-          </div>
-        </div>
+        {/* Stats hidden */}
       </aside>
 
       {/* ── Main ── */}
       <main className="app-main">
-        {activeTab === "companion"  && <CompanionMode />}
+        {activeTab === "companion"          && <CompanionMode />}
+        {activeTab === "companion-insights" && <CompanionInsights />}
         {activeTab === "today"      && <TodayView schedule={schedule} events={allEvents} energyPattern={energyPattern} learnedPattern={learnedPattern} onScheduleUpdate={handleScheduleBuilt} onNavigate={setActiveTab} />}
         {activeTab === "blackboard" && <BlackboardImport bb={bb} onEventsImported={handleBlackboardImport} />}
         {activeTab === "upload"     && <SyllabusUploader onEventsExtracted={handleEventsExtracted} />}

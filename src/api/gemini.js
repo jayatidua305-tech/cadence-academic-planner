@@ -254,6 +254,58 @@ Risky deadlines: ${riskyEvents?.slice(0,2).map(e=>e.title).join(", ")||"none"}`;
   return await callGemini(system, msg, 300, { feature: "WhatsApp Briefing", action: "generate_briefing" });
 }
 
+export async function suggestDayFocusBlock(circleName, memberNames, dateStr, freeBlocks) {
+  const blocksDesc = freeBlocks.map(b =>
+    `• ${b.label} (${Math.round((b.duration / 60) * 10) / 10}h)`
+  ).join("\n");
+
+  const userMessage = `Focus circle "${circleName}" (${memberNames.join(", ")}) is planning a session on ${dateStr}.
+
+Shared free windows today:
+${blocksDesc || "None found."}
+
+Pick the single best window for a 60–90 minute focus session. Consider: prefer morning/early afternoon over late evening, prefer larger windows. Give a one-sentence reason.
+
+Respond ONLY with valid JSON (no markdown):
+{"date":"${dateStr}","startTime":"HH:MM","endTime":"HH:MM","reason":"..."}`;
+
+  const text = await callGemini(
+    "You are a scheduling assistant. Pick the best shared free window for a group focus session. Be concise.",
+    userMessage,
+    200,
+    { feature: "Group Calendar", action: "suggest_day_block" }
+  );
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) return null;
+  try { return JSON.parse(match[0]); } catch { return null; }
+}
+
+export async function suggestGroupFocusSlots(circleName, memberNames, freeSlots) {
+  const slotsDesc = freeSlots.slice(0, 10).map(s =>
+    `• ${s.dayName} ${s.date} ${s.startTime}–${s.endTime} (${Math.round((s.duration / 60) * 10) / 10}h free)`
+  ).join("\n");
+
+  const userMessage = `Focus circle "${circleName}" has ${memberNames.length} member(s): ${memberNames.join(", ")}.
+
+Shared free windows over the next 7 days:
+${slotsDesc || "No shared free slots found."}
+
+Pick the 1–2 BEST slots for a 60–90 minute group focus session. Prefer mornings or early afternoon. Avoid late evenings. Give a concise reason for each pick.
+
+Respond ONLY with valid JSON in this exact format (no markdown):
+{"suggestions":[{"date":"YYYY-MM-DD","dayName":"Mon","startTime":"HH:MM","endTime":"HH:MM","reason":"..."}]}`;
+
+  const text = await callGemini(
+    "You are a scheduling assistant. Choose optimal group study slots from the given free windows. Be concise and practical.",
+    userMessage,
+    400,
+    { feature: "Group Calendar", action: "suggest_slots" }
+  );
+  const match = text.match(/\{[\s\S]*\}/);
+  if (!match) return { suggestions: [] };
+  try { return JSON.parse(match[0]); } catch { return { suggestions: [] }; }
+}
+
 export async function generateSyllabusSummary(syllabusText, courseName = "Unknown Course") {
   const system = `You are a syllabus analyst. Extract and summarize key information from the provided syllabus text. 
 Return ONLY valid JSON with no markdown or code blocks.

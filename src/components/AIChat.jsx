@@ -245,10 +245,11 @@ export default function AIChat({ schedule, events, energyPattern, onScheduleUpda
             )}
             <div style={{
               maxWidth:"82%", padding:"10px 14px",
-              background: msg.role==="user" ? "var(--grad-purple)" : "rgba(255,255,255,0.05)",
-              border: msg.role==="user" ? "none" : "1px solid var(--border)",
-              color:"var(--text)", fontSize:"0.82rem", lineHeight:1.6,
+              background: msg.role==="user" ? "var(--grad-purple)" : "#ffffff",
+              border: msg.role==="user" ? "none" : "1px solid #d8cfc5",
+              color: msg.role==="user" ? "#fff" : "#1a1a1a", fontSize:"0.82rem", lineHeight:1.6,
               whiteSpace:"pre-wrap",
+              boxShadow: msg.role==="assistant" ? "0 1px 4px rgba(0,0,0,0.06)" : "none",
               borderRadius: msg.role==="user" ? "12px 12px 2px 12px" : "12px 12px 12px 2px",
             }}>
               {msg.text}
@@ -269,7 +270,7 @@ export default function AIChat({ schedule, events, energyPattern, onScheduleUpda
             border:"1px solid rgba(251,191,36,0.35)",
             borderRadius:12, padding:"14px 16px",
           }}>
-            <div style={{ fontWeight:700, fontSize:"0.85rem", color:"var(--amber)", marginBottom:10 }}>
+            <div style={{ fontWeight:700, fontSize:"0.85rem", color:"#92400e", marginBottom:10 }}>
               ⚠️ Review changes before applying
             </div>
 
@@ -325,12 +326,12 @@ export default function AIChat({ schedule, events, energyPattern, onScheduleUpda
 
             {/* Confirm / Cancel */}
             <div style={{ display:"flex", gap:8 }}>
-              <Button onClick={confirmChange} variant="success" style={{flex:1, padding:"9px", borderRadius:10, fontSize:"0.85rem"}}>
+              <button onClick={confirmChange} style={{flex:1, padding:"9px", borderRadius:10, fontSize:"0.85rem", fontWeight:600, background:"#16a34a", color:"#fff", border:"none", cursor:"pointer"}}>
                 ✅ Yes, apply changes
-              </Button>
-              <Button onClick={rejectChange} variant="secondary" style={{flex:1, padding:"9px", borderRadius:10, fontSize:"0.85rem"}}>
+              </button>
+              <button onClick={rejectChange} style={{flex:1, padding:"9px", borderRadius:10, fontSize:"0.85rem", fontWeight:600, background:"#fff", color:"#374151", border:"1px solid #d1d5db", cursor:"pointer"}}>
                 ❌ No, keep as is
-              </Button>
+              </button>
             </div>
           </div>
         )}
@@ -338,7 +339,8 @@ export default function AIChat({ schedule, events, energyPattern, onScheduleUpda
         {loading && (
           <div style={{ display:"flex", justifyContent:"flex-start" }}>
             <div style={{ padding:"10px 14px", borderRadius:"12px 12px 12px 2px",
-              background:"rgba(255,255,255,0.05)", border:"1px solid var(--border)",
+              background:"#ffffff", border:"1px solid #d8cfc5",
+              boxShadow:"0 1px 4px rgba(0,0,0,0.06)",
               display:"flex", gap:4, alignItems:"center" }}>
               {[0,1,2].map(i => (
                 <div key={i} style={{ width:6, height:6, borderRadius:"50%", background:"var(--purple-l)",
@@ -362,8 +364,8 @@ export default function AIChat({ schedule, events, energyPattern, onScheduleUpda
       </div>
 
       {/* Input */}
-      <div style={{ padding:"10px 18px", borderTop:"1px solid var(--border)",
-        display:"flex", gap:8, background:"rgba(255,255,255,0.02)", alignItems:"center" }}>
+      <div style={{ padding:"10px 18px", borderTop:"1px solid #e5ded7",
+        display:"flex", gap:8, background:"#f8f4ef", alignItems:"center" }}>
         <input className="input" value={input}
           onChange={e => setInput(e.target.value)}
           onKeyDown={e => e.key==="Enter" && !pending && send()}

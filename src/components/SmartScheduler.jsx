@@ -461,11 +461,11 @@ export default function SmartScheduler({ extractedEvents, energyPattern, learned
             <div style={{display:"flex",gap:10,marginBottom:14,flexWrap:"wrap"}}>
               <div style={{background:"rgba(251,191,36,0.1)",border:"1px solid rgba(251,191,36,0.25)",borderRadius:8,padding:"10px 16px"}}>
                 <div style={{fontSize:"0.7rem",color:"var(--amber)",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.06em"}}>Archetype</div>
-                <div style={{fontWeight:700,fontSize:"1rem",color:"var(--amber)"}}>{schedule.archetype}</div>
+                <div style={{fontWeight:700,fontSize:"1rem",color:"var(--amber)"}}>{schedule.archetype || learnedPattern?.archetype || energyPattern?.archetype || "Flexible"}</div>
               </div>
               <div style={{background:"rgba(124,111,247,0.1)",border:"1px solid rgba(124,111,247,0.25)",borderRadius:8,padding:"10px 16px"}}>
                 <div style={{fontSize:"0.7rem",color:"var(--purple-l)",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.06em"}}>Peak hours</div>
-                <div style={{fontWeight:700,fontSize:"1rem",color:"var(--purple-l)",fontFamily:"monospace"}}>{schedule.peakHours}</div>
+                <div style={{fontWeight:700,fontSize:"1rem",color:"var(--purple-l)",fontFamily:"monospace"}}>{schedule.peakHours || learnedPattern?.peakHours || energyPattern?.peakHours || "—"}</div>
               </div>
               {completedCount>0&&<div style={{background:"rgba(74,222,128,0.1)",border:"1px solid rgba(74,222,128,0.25)",borderRadius:8,padding:"10px 16px"}}>
                 <div style={{fontSize:"0.7rem",color:"var(--green)",fontWeight:600,textTransform:"uppercase",letterSpacing:"0.06em"}}>Completed</div>

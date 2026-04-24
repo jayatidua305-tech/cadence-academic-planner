@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { Button } from "./UILibrary";
 import { getStats } from "../utils/completionStore";
+import { suggestGroupFocusSlots, suggestDayFocusBlock } from "../api/gemini";
+import { getGroupCommonSlots, getCommonFreeBlocks } from "../utils/groupAvailability";
 import {
   addDemoMembers,
   acceptGroupBlocker,
@@ -15,12 +17,15 @@ import {
   logFocusSession,
   rejectGroupBlocker,
   removeMemberFromCircle,
+  renameGroupBlocker,
+  reorderCircle,
   setChallengeActive,
   setCurrentCircle,
   setMemberGoogleCalendarToken,
   setShareTaskNames,
   suggestGroupBlocker,
   updateProfileName,
+  deleteCircle,
 } from "../utils/companionStore";
 import { initEmailJS, sendInvitationEmail, getInviteLink, getConfigurationGuide } from "../utils/emailService";
 
@@ -34,6 +39,48 @@ function shortDate(isoDate) {
   const d = new Date(`${isoDate}T00:00:00`);
   return d.toLocaleDateString("en-US", { weekday: "short" });
 }
+
+// --- Group Calendar helpers ---
+const MEMBER_COLORS = ["#6366f1", "#22c55e", "#7dd3fc", "#ef4444", "#38bdf8", "#a78bfa", "#fb923c"];
+
+function getDemoSchedule(memberId, dateStr) {
+  const seed = memberId.split("").reduce((a, c) => a + c.charCodeAt(0), 0);
+  const dateSeed = dateStr.replace(/-/g, "").split("").reduce((a, c) => a + c.charCodeAt(0), 0);
+  const combined = (seed * 31 + dateSeed) % 64;
+  const slots = [
+    { startTime: "08:00", endTime: "09:30", title: "Morning class" },
+    { startTime: "10:00", endTime: "11:30", title: "Lecture" },
+    { startTime: "13:00", endTime: "14:30", title: "Workshop" },
+    { startTime: "15:00", endTime: "16:30", title: "Study group" },
+    { startTime: "17:00", endTime: "18:00", title: "Office hours" },
+    { startTime: "20:00", endTime: "21:30", title: "Evening review" },
+  ];
+  return slots.filter((_, i) => (combined >> i) & 1).map(s => ({ ...s, date: dateStr }));
+}
+
+function buildMemberEventsMap(members, myId, days) {
+  let myEvents = [];
+  try {
+    const all = JSON.parse(localStorage.getItem("smart_cal_all_events") || "[]");
+    myEvents = all.filter(e => days.includes(e.date) && e.startTime && e.endTime);
+  } catch {}
+  const map = {};
+  members.forEach(m => {
+    map[m.id] = m.id === myId
+      ? myEvents
+      : days.flatMap(d => getDemoSchedule(m.id, d));
+  });
+  return map;
+}
+
+function next7Days() {
+  return Array.from({ length: 7 }, (_, i) => {
+    const d = new Date();
+    d.setDate(d.getDate() + i);
+    return d.toISOString().split("T")[0];
+  });
+}
+// --- End Group Calendar helpers ---
 
 export default function CompanionMode() {
   const [state, setState] = useState(loadCompanionState());
@@ -56,6 +103,16 @@ export default function CompanionMode() {
   const [remainingSec, setRemainingSec] = useState(25 * 60);
   const [running, setRunning] = useState(false);
   const [isGroupSession, setIsGroupSession] = useState(false);
+
+  const [calDay, setCalDay] = useState(0);
+  const [editingBlockerId, setEditingBlockerId] = useState(null);
+  const [editingBlockerTitle, setEditingBlockerTitle] = useState("");
+  const [aiSlots, setAiSlots] = useState(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [circleDropdownOpen, setCircleDropdownOpen] = useState(false);
+  const [dragOverCircleId, setDragOverCircleId] = useState(null);
+  const dragSrcCircleId = React.useRef(null);
+
 
   const refresh = () => {
     const currentState = loadCompanionState();
@@ -183,12 +240,12 @@ export default function CompanionMode() {
         border: "1px solid var(--border)",
         flexWrap: "wrap"
       }}>
-        {["circles", "focus", "leaderboard", "activity"].map(tab => (
+        {["circles", "focus", "activity", "calendar"].map(tab => (
           <button
             key={tab}
             onClick={() => setActiveTab(tab)}
             style={{
-              flex: tab === "leaderboard" ? 1 : "0 1 auto",
+              flex: "0 1 auto",
               minWidth: "90px",
               padding: "10px 14px",
               borderRadius: "8px",
@@ -204,11 +261,96 @@ export default function CompanionMode() {
             }}>
             {tab === "circles" && "🎯 Circles"}
             {tab === "focus" && "⏲️ Focus"}
-            {tab === "leaderboard" && "🏆 Stats"}
             {tab === "activity" && "🗞 Activity"}
+            {tab === "calendar" && "📅 Calendar"}
           </button>
         ))}
       </div>
+
+      {/* ACTIVE CIRCLE DROPDOWN */}
+      {activeTab !== "circles" && summary.currentCircle && (
+        <div style={{ display: "flex", justifyContent: "flex-end", position: "relative", margin: "4px 0 0" }}>
+          <button
+            onClick={() => setCircleDropdownOpen(o => !o)}
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 7,
+              padding: "5px 12px 5px 10px",
+              borderRadius: 8,
+              border: "1px solid rgba(99,102,241,0.3)",
+              background: "rgba(99,102,241,0.10)",
+              cursor: "pointer",
+              fontSize: "0.8rem",
+              fontWeight: 600,
+              color: "#c4b5fd",
+              transition: "background 0.15s",
+            }}
+          >
+            <span style={{ fontSize: "0.65rem", color: "var(--muted)", fontWeight: 500, textTransform: "uppercase", letterSpacing: "0.05em" }}>Circle</span>
+            <span style={{ width: 1, height: 10, background: "rgba(167,139,250,0.4)", display: "inline-block", borderRadius: 2 }} />
+            <span>🎯 {summary.currentCircle.name}</span>
+            <span style={{ fontSize: "0.65rem", color: "#818cf8", background: "rgba(99,102,241,0.18)", borderRadius: 20, padding: "1px 7px" }}>
+              {summary.currentCircle.members?.length ?? 0}
+            </span>
+            <span style={{ fontSize: "0.65rem", color: "var(--muted)", marginLeft: 2 }}>{circleDropdownOpen ? "▲" : "▼"}</span>
+          </button>
+
+          {circleDropdownOpen && (
+            <div
+              onMouseLeave={() => setCircleDropdownOpen(false)}
+              style={{
+                position: "absolute",
+                top: "calc(100% + 6px)",
+                right: 0,
+                zIndex: 999,
+                background: "#f5f5f7",
+                border: "1px solid #d1d5db",
+                borderRadius: 10,
+                boxShadow: "0 8px 24px rgba(0,0,0,0.15)",
+                minWidth: 220,
+                overflow: "hidden",
+              }}
+            >
+              <div style={{ padding: "6px 12px 4px", fontSize: "0.65rem", color: "#6b7280", textTransform: "uppercase", letterSpacing: "0.06em", fontWeight: 700, borderBottom: "1px solid #e5e7eb" }}>
+                Switch Circle
+              </div>
+              {(summary.state?.circles || []).map(c => {
+                const isActive = c.id === summary.currentCircle.id;
+                return (
+                  <button
+                    key={c.id}
+                    onClick={() => {
+                      setCurrentCircle(c.id);
+                      refresh();
+                      setCircleDropdownOpen(false);
+                    }}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                      width: "100%",
+                      padding: "9px 14px",
+                      border: "none",
+                      borderBottom: "1px solid #e5e7eb",
+                      background: isActive ? "#e0e7ff" : "#f5f5f7",
+                      cursor: "pointer",
+                      textAlign: "left",
+                      color: isActive ? "#4338ca" : "#111827",
+                      fontWeight: isActive ? 700 : 400,
+                      fontSize: "0.83rem",
+                      transition: "background 0.1s",
+                    }}
+                  >
+                    <span style={{ flex: 1 }}>{isActive ? "✓ " : ""}{c.name}</span>
+                    <span style={{ fontSize: "0.68rem", color: "#6b7280" }}>{c.members?.length ?? 0} members</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* CIRCLES TAB */}
       {activeTab === "circles" && (
@@ -393,26 +535,64 @@ export default function CompanionMode() {
 
         <div style={{ marginTop: 12, display: "grid", gridTemplateColumns: "1.4fr 1fr", gap: 12 }}>
           <div style={{ border: "1px solid var(--border)", borderRadius: 10, padding: "12px" }}>
-            <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginBottom: 8 }}>Your circles</div>
+            <div style={{ fontSize: "0.75rem", color: "var(--muted)", marginBottom: 8 }}>Your circles <span style={{ fontSize: "0.68rem", color: "var(--hint)" }}>· drag to reorder</span></div>
             <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
-              {state.circles.map((circle) => (
-                <Button
-                  key={circle.id}
-                  variant={circle.id === state.currentCircleId ? "primary" : "secondary"}
-                  onClick={() => {
-                    setCurrentCircle(circle.id);
-                    refresh();
-                  }}
-                  style={{
-                    justifyContent:"space-between",
-                  }}
-                >
-                  <span>{circle.name}</span>
-                  <span style={{fontSize:"0.68rem",fontFamily:"JetBrains Mono",color:"var(--hint)"}}>
-                    code {circle.code}
-                  </span>
-                </Button>
-              ))}
+              {state.circles.map((circle) => {
+                const isOver = dragOverCircleId === circle.id && dragSrcCircleId.current !== circle.id;
+                return (
+                  <div
+                    key={circle.id}
+                    draggable
+                    onDragStart={() => { dragSrcCircleId.current = circle.id; }}
+                    onDragOver={(e) => { e.preventDefault(); setDragOverCircleId(circle.id); }}
+                    onDragLeave={() => setDragOverCircleId(null)}
+                    onDrop={() => {
+                      const src = dragSrcCircleId.current;
+                      const dst = circle.id;
+                      if (src && dst && src !== dst) {
+                        const s = loadCompanionState();
+                        const srcIdx = s.circles.findIndex(c => c.id === src);
+                        const dstIdx = s.circles.findIndex(c => c.id === dst);
+                        if (srcIdx !== -1 && dstIdx !== -1) {
+                          const circles = [...s.circles];
+                          const [moved] = circles.splice(srcIdx, 1);
+                          circles.splice(dstIdx, 0, moved);
+                          s.circles = circles;
+                          // save via reorderCircle logic inline
+                          try { localStorage.setItem("smart_cal_companion_v1", JSON.stringify(s)); } catch {}
+                          refresh();
+                        }
+                      }
+                      dragSrcCircleId.current = null;
+                      setDragOverCircleId(null);
+                    }}
+                    onDragEnd={() => { dragSrcCircleId.current = null; setDragOverCircleId(null); }}
+                    style={{ display: "flex", gap: 8, alignItems: "center", cursor: "grab",
+                      borderRadius: 8,
+                      outline: isOver ? "2px solid #818cf8" : "2px solid transparent",
+                      transition: "outline 0.12s",
+                    }}
+                  >
+                    {/* Drag handle */}
+                    <span style={{
+                      display: "flex", flexDirection: "column", gap: 3, padding: "4px 2px",
+                      color: "#a5b4fc", flexShrink: 0, userSelect: "none", fontSize: "0.7rem", lineHeight: 1,
+                    }}>
+                      &#x2807;
+                    </span>
+                    <Button
+                      variant={circle.id === state.currentCircleId ? "primary" : "secondary"}
+                      onClick={() => { setCurrentCircle(circle.id); refresh(); }}
+                      style={{ justifyContent: "space-between", flex: 1, cursor: "pointer" }}
+                    >
+                      <span>{circle.name}</span>
+                      <span style={{ fontSize: "0.68rem", fontFamily: "JetBrains Mono", color: "var(--hint)" }}>
+                        code {circle.code}
+                      </span>
+                    </Button>
+                  </div>
+                );
+              })}
             </div>
           </div>
 
@@ -498,6 +678,25 @@ export default function CompanionMode() {
                 }}
               >
                 Leave circle
+              </Button>
+            )}
+            {summary.currentCircle?.members?.find(m => m.id === state.profile.id)?.role === "owner" && (
+              <Button
+                variant="secondary"
+                style={{ fontSize: "0.74rem", width: "100%", marginTop: 4, background: "rgba(239,68,68,0.12)", color: "var(--red)", borderColor: "rgba(239,68,68,0.3)" }}
+                onClick={() => {
+                  if (!window.confirm(`Delete "${summary.currentCircle.name}"? This cannot be undone.`)) return;
+                  try {
+                    deleteCircle(summary.currentCircle.id);
+                    setToast("🗑️ Circle deleted");
+                    setTimeout(() => setToast(""), 2000);
+                    refresh();
+                  } catch (err) {
+                    setError(err.message);
+                  }
+                }}
+              >
+                🗑 Delete circle
               </Button>
             )}
           </div>
@@ -609,37 +808,6 @@ export default function CompanionMode() {
                 >
                   + Suggest Group Block
                 </button>
-                
-                <button
-                  className="btn"
-                  onClick={() => {
-                    try {
-                      const unconnectedMembers = circle?.members?.filter(m => m.email && !m.googleCalendarToken) || [];
-                      if (unconnectedMembers.length > 0) {
-                        setToast(`⏳ Waiting for ${unconnectedMembers.length} member(s) to connect Google Calendar...`);
-                      } else {
-                        const suggestions = autoSuggestGroupBlockers(summary.currentCircle?.id);
-                        if (suggestions.length === 0) {
-                          setToast("⏳ Suggestions already exist for this week");
-                        } else {
-                          setToast(`🤖 Generated ${suggestions.length} optimal blocks!`);
-                        }
-                      }
-                      setTimeout(() => setToast(""), 2500);
-                      refresh();
-                    } catch (err) {
-                      setError(err.message);
-                    }
-                  }}
-                  style={{
-                    fontSize: "0.85rem",
-                    background: "rgba(99,102,241,0.15)",
-                    borderColor: "rgba(99,102,241,0.3)",
-                    color: "#6366f1",
-                  }}
-                >
-                  🤖 Auto-Suggest (2-3)
-                </button>
               </div>
 
               {groupBlockers.length === 0 ? (
@@ -666,8 +834,49 @@ export default function CompanionMode() {
                           background: allAccepted ? "rgba(34,197,94,0.12)" : blocker.autoGenerated ? "rgba(99,102,241,0.08)" : "rgba(255,255,255,0.03)",
                         }}
                       >
-                        <div style={{ fontSize: "0.88rem", fontWeight: 600, marginBottom: 6 }}>
-                          {allAccepted ? "✅" : "⏳"} {blocker.title} {blocker.autoGenerated && <span style={{ fontSize: "0.75rem", color: "#6366f1" }}>🤖</span>}
+                        <div style={{ fontSize: "0.88rem", fontWeight: 600, marginBottom: 6, display: "flex", alignItems: "center", gap: 8 }}>
+                          {editingBlockerId === blocker.id ? (
+                            <>
+                              <input
+                                className="input"
+                                value={editingBlockerTitle}
+                                onChange={e => setEditingBlockerTitle(e.target.value)}
+                                onKeyDown={e => {
+                                  if (e.key === "Enter") {
+                                    renameGroupBlocker(blocker.id, editingBlockerTitle);
+                                    setEditingBlockerId(null);
+                                    refresh();
+                                  } else if (e.key === "Escape") {
+                                    setEditingBlockerId(null);
+                                  }
+                                }}
+                                autoFocus
+                                style={{ fontSize: "0.84rem", padding: "3px 8px", maxWidth: 220, height: 28 }}
+                              />
+                              <button
+                                className="btn"
+                                style={{ fontSize: "0.7rem", padding: "3px 8px", background: "rgba(34,197,94,0.15)", borderColor: "rgba(34,197,94,0.4)", color: "#22c55e" }}
+                                onClick={() => {
+                                  renameGroupBlocker(blocker.id, editingBlockerTitle);
+                                  setEditingBlockerId(null);
+                                  refresh();
+                                }}
+                              >Save</button>
+                              <button
+                                className="btn"
+                                style={{ fontSize: "0.7rem", padding: "3px 8px" }}
+                                onClick={() => setEditingBlockerId(null)}
+                              >Cancel</button>
+                            </>
+                          ) : (
+                            <>
+                              <span>{allAccepted ? "✅" : "⏳"} {blocker.title} {blocker.autoGenerated && <span style={{ fontSize: "0.75rem", color: "#6366f1" }}>🤖</span>}</span>
+                              <button
+                                onClick={() => { setEditingBlockerId(blocker.id); setEditingBlockerTitle(blocker.title); }}
+                                style={{ fontSize: "0.68rem", padding: "2px 6px", background: "transparent", border: "1px solid rgba(255,255,255,0.12)", borderRadius: 5, color: "var(--muted)", cursor: "pointer" }}
+                              >✏️</button>
+                            </>
+                          )}
                         </div>
                         <div style={{ fontSize: "0.75rem", color: "var(--hint)", marginBottom: 8 }}>
                           {blocker.date} • {blocker.startTime}–{blocker.endTime} ({blocker.duration}m)
@@ -722,6 +931,26 @@ export default function CompanionMode() {
                               ✅ Added to Calendar
                             </div>
                           )}
+                          <button
+                            onClick={() => {
+                              rejectGroupBlocker(blocker.id);
+                              setToast("🗑️ Block removed");
+                              setTimeout(() => setToast(""), 1500);
+                              refresh();
+                            }}
+                            style={{
+                              fontSize: "0.72rem",
+                              padding: "4px 8px",
+                              background: "transparent",
+                              border: "1px solid rgba(255,255,255,0.1)",
+                              borderRadius: 6,
+                              color: "var(--muted)",
+                              cursor: "pointer",
+                              marginLeft: "auto",
+                            }}
+                          >
+                            🗑 Remove
+                          </button>
                         </div>
                       </div>
                     );
@@ -735,8 +964,8 @@ export default function CompanionMode() {
       </div>
       )}
 
-      {/* LEADERBOARD & CHALLENGE TAB */}
-      {activeTab === "leaderboard" && (
+      {/* STATS & INSIGHTS — moved to CompanionInsights page */}
+      {false && (<>
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
       <div className="card">
         <div className="card-sub">Ranked by focused minutes first, then tasks completed, then streak.</div>
@@ -804,11 +1033,331 @@ export default function CompanionMode() {
         </div>
       </div>
       </div>
-      )}
+
+      {/* INSIGHTS SECTION */}
+      {(() => {
+        const totalGroupMinutes = standings.reduce((s, m) => s + m.focusMinutes, 0);
+        const avgMinutes = standings.length ? Math.round(totalGroupMinutes / standings.length) : 0;
+        const leader = standings[0];
+        const you = standings.find(m => m.isYou);
+        const yourRank = standings.findIndex(m => m.isYou) + 1;
+        const maxFocus = leader?.focusMinutes || 1;
+        const minutesToFirst = you && yourRank > 1 ? leader.focusMinutes - you.focusMinutes : 0;
+
+        let momentumText = "";
+        if (totalGroupMinutes >= 1000) momentumText = "🔥 Your circle is crushing it this week!";
+        else if (totalGroupMinutes >= 400) momentumText = "💪 Solid group effort — keep the momentum going.";
+        else momentumText = "⚡ Time to get the circle fired up — log a group session!";
+
+        let yourInsight = "";
+        if (yourRank === 1) yourInsight = "👑 You're leading the circle this week. Keep it up!";
+        else if (yourRank === 2) yourInsight = `🥈 You're in 2nd — ${minutesToFirst}m away from the top spot.`;
+        else yourInsight = `You're ranked #${yourRank}. ${leader ? `${leader.name} leads with ${leader.focusMinutes}m — log a session to close the gap.` : ""}`;
+
+        return (
+          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+            {/* Top row: Circle Pulse + Your Standing */}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+              <div className="card">
+                <div className="card-title">⚡ Circle Pulse</div>
+                <div className="card-sub">Combined effort across all {standings.length} members this week.</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginTop: 12 }}>
+                  <div style={{ textAlign: "center", padding: "12px 8px", borderRadius: 10, border: "1px solid var(--border)", background: "rgba(99,102,241,0.07)" }}>
+                    <div style={{ fontFamily: "JetBrains Mono", fontSize: "1.6rem", fontWeight: 700, color: "var(--purple-l)" }}>{totalGroupMinutes}m</div>
+                    <div style={{ fontSize: "0.72rem", color: "var(--muted)", marginTop: 4 }}>Total Group Focus</div>
+                  </div>
+                  <div style={{ textAlign: "center", padding: "12px 8px", borderRadius: 10, border: "1px solid var(--border)", background: "rgba(79,159,255,0.07)" }}>
+                    <div style={{ fontFamily: "JetBrains Mono", fontSize: "1.6rem", fontWeight: 700, color: "var(--blue-l)" }}>{avgMinutes}m</div>
+                    <div style={{ fontSize: "0.72rem", color: "var(--muted)", marginTop: 4 }}>Avg Per Member</div>
+                  </div>
+                </div>
+                <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 10, border: "1px solid var(--border)", background: "rgba(0,0,0,0.02)", fontSize: "0.84rem", color: "var(--text)" }}>
+                  {momentumText}
+                </div>
+              </div>
+
+              <div className="card">
+                <div className="card-title">🎯 Your Standing</div>
+                <div className="card-sub">How you compare to the rest of the circle.</div>
+                <div style={{ marginTop: 12, padding: "14px", borderRadius: 10, border: "1px solid rgba(124,111,247,0.3)", background: "rgba(124,111,247,0.07)" }}>
+                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                    <div style={{ fontFamily: "JetBrains Mono", fontSize: "2.2rem", fontWeight: 700, color: "var(--purple-l)" }}>#{yourRank}</div>
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ fontFamily: "JetBrains Mono", fontSize: "1.2rem", fontWeight: 600 }}>{you?.focusMinutes || 0}m</div>
+                      <div style={{ fontSize: "0.72rem", color: "var(--muted)" }}>your focus this week</div>
+                    </div>
+                  </div>
+                  <div style={{ marginTop: 10, fontSize: "0.84rem", color: "var(--text)" }}>{yourInsight}</div>
+                </div>
+                {yourRank > 1 && you && (
+                  <div style={{ marginTop: 12 }}>
+                    <div style={{ fontSize: "0.72rem", color: "var(--muted)", marginBottom: 5 }}>Progress to #1</div>
+                    <div style={{ background: "var(--border)", borderRadius: 99, height: 8, overflow: "hidden" }}>
+                      <div style={{ height: "100%", borderRadius: 99, background: "var(--grad-purple)", width: `${Math.min(100, Math.round((you.focusMinutes / maxFocus) * 100))}%`, transition: "width 0.4s" }} />
+                    </div>
+                    <div style={{ fontSize: "0.7rem", color: "var(--hint)", marginTop: 4 }}>{you.focusMinutes}m / {maxFocus}m</div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Member Spotlights */}
+            <div className="card">
+              <div className="card-title">👥 Member Spotlights</div>
+              <div className="card-sub">Weekly focus breakdown for each circle member.</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, marginTop: 12 }}>
+                {standings.map((m, idx) => (
+                  <div key={m.id} style={{ padding: "10px 12px", borderRadius: 10, border: `1px solid ${m.isYou ? "rgba(124,111,247,0.35)" : "var(--border)"}`, background: m.isYou ? "rgba(124,111,247,0.06)" : "transparent" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                      <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                        <span style={{ fontWeight: 700, fontSize: "0.82rem", color: idx === 0 ? "var(--amber)" : "var(--muted)", minWidth: 22 }}>#{idx + 1}</span>
+                        <span style={{ fontWeight: 600 }}>{m.name}{m.isYou ? " (you)" : ""}</span>
+                        {idx === 0 && <span style={{ fontSize: "0.7rem", padding: "2px 8px", borderRadius: 99, background: "rgba(245,158,11,0.15)", color: "var(--amber)", fontWeight: 600 }}>Leader</span>}
+                        {m.isYou && idx > 0 && <span style={{ fontSize: "0.7rem", padding: "2px 8px", borderRadius: 99, background: "rgba(124,111,247,0.15)", color: "var(--purple-l)", fontWeight: 600 }}>You</span>}
+                      </div>
+                      <div style={{ display: "flex", gap: 16, fontSize: "0.78rem", fontFamily: "JetBrains Mono" }}>
+                        <span style={{ color: "var(--blue-l)" }}>{m.focusMinutes}m</span>
+                        <span style={{ color: "var(--green)" }}>{m.tasksCompleted} tasks</span>
+                        <span style={{ color: "var(--purple-l)" }}>{m.streak}d streak</span>
+                      </div>
+                    </div>
+                    <div style={{ background: "var(--border)", borderRadius: 99, height: 6, overflow: "hidden" }}>
+                      <div style={{ height: "100%", borderRadius: 99, background: idx === 0 ? "linear-gradient(90deg,#f59e0b,#fbbf24)" : "var(--grad-purple)", width: `${Math.round((m.focusMinutes / maxFocus) * 100)}%`, transition: "width 0.4s" }} />
+                    </div>
+                    <div style={{ fontSize: "0.7rem", color: "var(--hint)", marginTop: 4 }}>{Math.round((m.focusMinutes / maxFocus) * 100)}% of group max</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+      </>)}
+
+      {/* GROUP CALENDAR TAB */}
+      {activeTab === "calendar" && (() => {
+        const members = summary.currentCircle?.members || [];
+        const days = next7Days();
+        const selectedDateStr = days[calDay];
+        const selectedDayMap = buildMemberEventsMap(members, state.profile.id, [selectedDateStr]);
+        const freeBlocks = getCommonFreeBlocks(selectedDayMap, selectedDateStr, 8, 22, 45);
+        const HOURS = Array.from({ length: 14 }, (_, i) => i + 8); // 8am–9pm
+
+        const allBusyPerHour = HOURS.map(h =>
+          members.some(m =>
+            (selectedDayMap[m.id] || []).some(e => {
+              const s = parseInt((e.startTime || "").split(":")[0] || "0");
+              const en = parseInt((e.endTime || "").split(":")[0] || "0");
+              return h >= s && h < en;
+            })
+          )
+        );
+
+        const handleAiSuggest = async () => {
+          setAiLoading(true);
+          setAiSlots(null);
+          try {
+            const map = buildMemberEventsMap(members, state.profile.id, days);
+            const slots = getGroupCommonSlots(map, [days[0], days[6]], 60, 10);
+            const result = await suggestGroupFocusSlots(
+              summary.currentCircle?.name || "Focus Circle",
+              members.map(m => m.name),
+              slots
+            );
+            setAiSlots(result.suggestions || []);
+          } catch {
+            setAiSlots([]);
+          } finally {
+            setAiLoading(false);
+          }
+        };
+
+        return (
+          <div className="card">
+            {/* Header */}
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", marginBottom: 16, flexWrap: "wrap", gap: 10 }}>
+              <div>
+                <div className="card-title" style={{ marginBottom: 2 }}>📅 Group Calendar</div>
+                <div className="card-sub">Shared availability for <strong>{summary.currentCircle?.name}</strong>. Red = someone blocked.</div>
+              </div>
+              <button
+                className="btn"
+                disabled={aiLoading}
+                onClick={handleAiSuggest}
+                style={{ fontSize: "0.82rem", background: "rgba(99,102,241,0.15)", borderColor: "rgba(99,102,241,0.4)", color: "#818cf8", minWidth: 150, opacity: aiLoading ? 0.7 : 1 }}
+              >
+                {aiLoading ? "⏳ Thinking..." : "🤖 AI Suggest Slots"}
+              </button>
+            </div>
+
+            {/* AI suggestion results */}
+            {aiSlots && aiSlots.length > 0 && (
+              <div style={{ marginBottom: 18 }}>
+                <div style={{ fontSize: "0.78rem", fontWeight: 700, color: "#818cf8", marginBottom: 8 }}>🤖 AI Recommended Focus Slots</div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {aiSlots.map((s, i) => (
+                    <div key={i} style={{ borderRadius: 10, border: "1px solid rgba(99,102,241,0.35)", background: "rgba(99,102,241,0.09)", padding: "10px 14px" }}>
+                      <div style={{ fontWeight: 700, fontSize: "0.88rem", color: "var(--text)" }}>
+                        Slot {i + 1}: {s.dayName} {s.date} · {s.startTime}–{s.endTime}
+                      </div>
+                      <div style={{ fontSize: "0.75rem", color: "var(--hint)", marginTop: 4 }}>{s.reason}</div>
+                      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
+                        <button
+                          className="btn"
+                          style={{ fontSize: "0.72rem", background: "rgba(34,197,94,0.15)", borderColor: "rgba(34,197,94,0.4)", color: "#22c55e" }}
+                          onClick={() => {
+                            const blocker = suggestGroupBlocker(summary.currentCircle?.id, "AI Group Focus Session", s.date, s.startTime, 90);
+                            acceptGroupBlocker(blocker.id, state.profile.id);
+                            setAiSlots(prev => prev.filter((_, idx) => idx !== i));
+                            refresh();
+                            setToast("✅ Added to Focus Blocks!");
+                            setTimeout(() => setToast(""), 2000);
+                          }}
+                        >
+                          ✓ Accept
+                        </button>
+                        <button
+                          className="btn"
+                          style={{ fontSize: "0.72rem", background: "rgba(239,68,68,0.12)", borderColor: "rgba(239,68,68,0.3)", color: "#ef4444" }}
+                          onClick={() => {
+                            setAiSlots(prev => prev.filter((_, idx) => idx !== i));
+                            setToast("❌ Slot dismissed");
+                            setTimeout(() => setToast(""), 1500);
+                          }}
+                        >
+                          ✕ Reject
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+            {aiSlots && aiSlots.length === 0 && (
+              <div style={{ marginBottom: 16, fontSize: "0.8rem", color: "var(--muted)", background: "rgba(255,255,255,0.03)", borderRadius: 8, padding: "10px 14px", border: "1px solid var(--border)" }}>
+                🤖 AI couldn't find a clear best slot — check the shared free windows below.
+              </div>
+            )}
+
+            {/* Day selector */}
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+              {days.map((d, i) => {
+                const dt = new Date(`${d}T00:00:00`);
+                const label = i === 0
+                  ? "Today"
+                  : dt.toLocaleDateString("en-US", { weekday: "short", month: "numeric", day: "numeric" });
+                return (
+                  <button
+                    key={d}
+                    className="btn"
+                    onClick={() => setCalDay(i)}
+                    style={{
+                      fontSize: "0.74rem",
+                      padding: "6px 10px",
+                      background: calDay === i ? "rgba(99,102,241,0.2)" : "rgba(255,255,255,0.03)",
+                      borderColor: calDay === i ? "rgba(99,102,241,0.5)" : "var(--border)",
+                      color: calDay === i ? "#818cf8" : "var(--text-muted)",
+                      fontWeight: calDay === i ? 700 : 400,
+                    }}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Timeline grid */}
+            <div style={{ overflowX: "auto", marginBottom: 12 }}>
+              {/* Hour labels */}
+              <div style={{ display: "grid", gridTemplateColumns: `72px repeat(${HOURS.length}, 1fr)`, gap: 2, marginBottom: 4, minWidth: 520 }}>
+                <div />
+                {HOURS.map(h => (
+                  <div key={h} style={{ fontSize: "0.58rem", color: "var(--hint)", textAlign: "center" }}>
+                    {h < 12 ? `${h}a` : h === 12 ? "12p" : `${h - 12}p`}
+                  </div>
+                ))}
+              </div>
+
+              {/* "All free" indicator row */}
+              <div style={{ display: "grid", gridTemplateColumns: `72px repeat(${HOURS.length}, 1fr)`, gap: 2, marginBottom: 5, minWidth: 520 }}>
+                <div style={{ fontSize: "0.62rem", color: "var(--text-muted)", alignSelf: "center", fontWeight: 600, paddingRight: 4 }}>Blocked</div>
+                {HOURS.map((h, hi) => (
+                  <div key={h} style={{
+                    height: 16,
+                    borderRadius: 3,
+                    background: allBusyPerHour[hi] ? "rgba(239,68,68,0.18)" : "rgba(255,255,255,0.07)",
+                    border: allBusyPerHour[hi] ? "1px solid rgba(239,68,68,0.35)" : "1px solid rgba(255,255,255,0.12)",
+                  }} />
+                ))}
+              </div>
+
+              {/* Per-member rows */}
+              {members.map((m, mi) => {
+                const color = MEMBER_COLORS[mi % MEMBER_COLORS.length];
+                return (
+                  <div key={m.id} style={{ display: "grid", gridTemplateColumns: `72px repeat(${HOURS.length}, 1fr)`, gap: 2, marginBottom: 4, minWidth: 520 }}>
+                    <div style={{ fontSize: "0.63rem", color, alignSelf: "center", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", paddingRight: 4 }} title={m.name}>
+                      {m.name.split(" ")[0]}
+                    </div>
+                    {HOURS.map(h => {
+                      const busy = (selectedDayMap[m.id] || []).some(e => {
+                        const s = parseInt((e.startTime || "").split(":")[0] || "0");
+                        const en = parseInt((e.endTime || "").split(":")[0] || "0");
+                        return h >= s && h < en;
+                      });
+                      return (
+                        <div key={h} style={{
+                          height: 14,
+                          borderRadius: 3,
+                          background: busy ? `${color}55` : "rgba(255,255,255,0.04)",
+                          border: busy ? `1px solid ${color}88` : "1px solid rgba(255,255,255,0.07)",
+                        }} />
+                      );
+                    })}
+                  </div>
+                );
+              })}
+
+              {/* Legend */}
+              <div style={{ display: "flex", gap: 12, marginTop: 10, flexWrap: "wrap" }}>
+                {members.map((m, mi) => (
+                  <div key={m.id} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                    <div style={{ width: 10, height: 10, borderRadius: 2, background: `${MEMBER_COLORS[mi % MEMBER_COLORS.length]}88` }} />
+                    <span style={{ fontSize: "0.67rem", color: "var(--hint)" }}>{m.name} {m.id === state.profile.id ? "(you)" : ""}</span>
+                  </div>
+                ))}
+                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  <div style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(239,68,68,0.18)", border: "1px solid rgba(239,68,68,0.35)" }} />
+                  <span style={{ fontSize: "0.67rem", color: "#f87171" }}>Blocked by someone</span>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                  <div style={{ width: 10, height: 10, borderRadius: 2, background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.12)" }} />
+                  <span style={{ fontSize: "0.67rem", color: "var(--hint)" }}>All free</span>
+                </div>
+              </div>
+            </div>
+
+            {/* Common free windows for selected day */}
+            {freeBlocks.length > 0 ? (
+              <div style={{ marginTop: 6 }}>
+                <div style={{ fontSize: "0.75rem", fontWeight: 700, color: "#7dd3fc", marginBottom: 6 }}>✅ Shared free windows</div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {freeBlocks.map((b, i) => (
+                    <div key={i} style={{ fontSize: "0.72rem", padding: "4px 10px", borderRadius: 8, background: "rgba(125,211,252,0.22)", border: "1px solid rgba(125,211,252,0.55)", color: "#38bdf8" }}>
+                      {b.label} ({Math.round((b.duration / 60) * 10) / 10}h)
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div style={{ marginTop: 6, fontSize: "0.76rem", color: "var(--muted)" }}>No shared free windows on this day.</div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* ACTIVITY TAB */}
-      {activeTab === "activity" && (
-      <div className="card">
+      {activeTab === "activity" && (      <div className="card">
         <div className="card-title">🗞 Circle Activity</div>
         {summary.activity.length === 0 ? (
           <div style={{ fontSize: "0.8rem", color: "var(--hint)" }}>No sessions logged yet in this circle.</div>
